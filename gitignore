@@ -10,4 +10,5 @@ venv/
 
 # VS Code or Cursor
 .vscode/
-
+# ENV variable
+.env
