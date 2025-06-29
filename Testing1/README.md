@@ -1,195 +1,181 @@
-# Document Q&A System with Google Gemini
+# HR Document Q&A System
 
-A powerful document-based question-answering system that uses Google's Gemini AI to provide intelligent, conversational responses based on your uploaded documents. The system supports multiple file formats including PDFs and provides a beautiful web interface.
+A sophisticated Flask-based web application that provides an intelligent HR assistant capable of answering questions about company policies, employee benefits, and workplace guidelines using document analysis and link-following capabilities.
 
-## 🌟 Features
+## 🚀 Features
 
-- **📄 Multi-Format Support**: Upload PDF, TXT, MD, CSV, JSON, XML, HTML files
-- **🤖 Conversational AI**: Intelligent, analytical responses with detailed reasoning
-- **🌐 Beautiful Web Interface**: Modern, responsive design with real-time chat
-- **📊 Document Analysis**: Deep analysis and insights from your documents
-- **🔍 Smart Retrieval**: Finds the most relevant document chunks for each question
-- **📱 Responsive Design**: Works on desktop, tablet, and mobile devices
+### Core Functionality
+- **Document Upload & Processing**: Support for PDF and text files
+- **Intelligent Q&A**: Powered by Google Gemini AI for natural language understanding
+- **HR Persona**: Professional, empathetic responses with structured formatting
+- **Link Following**: Automatically extracts and fetches content from URLs in documents
+- **PDF Link Extraction**: Detects and processes clickable hyperlinks in PDF files
 
-## 🚀 Quick Start
+### Advanced Capabilities
+- **Multi-Document Support**: Handle multiple documents simultaneously
+- **Context-Aware Responses**: Provides relevant information from uploaded documents
+- **Structured Output**: Professional formatting with bullet points and clear sections
+- **Real-time Processing**: Instant responses with document analysis
 
-### Prerequisites
+## 📋 Requirements
 
-- Python 3.8 or higher
-- Google AI Studio API key
+- Python 3.8+
+- Google Gemini API Key
+- Internet connection (for link following)
 
-### Installation
+## 🛠️ Installation
 
-1. **Clone the repository**
+1. **Clone the repository**:
    ```bash
-   git clone <your-repo-url>
+   git clone <repository-url>
    cd Testing1
    ```
 
-2. **Create and activate virtual environment**
+2. **Create and activate virtual environment**:
    ```bash
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 
-3. **Install dependencies**
+3. **Install dependencies**:
    ```bash
    pip install -r requirements.txt
    ```
 
-4. **Set up your API key**
+4. **Set up environment variables**:
    Create a `.env` file in the project root:
    ```env
-   GOOGLE_API_KEY=your_google_ai_studio_api_key_here
+   GEMINI_API_KEY=your_gemini_api_key_here
    ```
 
-5. **Run the application**
-   ```bash
-   python web_app.py
-   ```
+## 🚀 Usage
 
-6. **Open your browser**
-   Navigate to `http://localhost:8080`
+### Starting the Server
 
-## 📋 Usage
+Run the HR bot server:
+```bash
+python web_app_hr_bot.py
+```
 
-### Web Interface
+The application will be available at `http://localhost:8080`
 
-1. **Upload Documents**: Click "Choose File" to upload your documents
-2. **Ask Questions**: Type your questions in the chat interface
-3. **Get Insights**: Receive detailed, analytical responses based on your documents
+### Available Applications
 
-### Supported File Types
+1. **HR Bot** (`web_app_hr_bot.py`): Main HR assistant with professional persona
+2. **Multi-Model** (`web_app_multi_model.py`): Support for multiple AI models
+3. **Link Following** (`web_app_with_links.py`): Enhanced link processing
+4. **Basic** (`web_app.py`): Simple document Q&A
 
-- **PDF** (.pdf) - Full text extraction from all pages
-- **Text** (.txt, .md) - Plain text and markdown files
-- **Data** (.csv, .json, .xml) - Structured data files
-- **Web** (.html, .htm) - HTML documents
+### API Endpoints
 
-### Example Questions
+- `GET /` - Main interface
+- `POST /api/upload` - Upload documents
+- `POST /api/chat` - Ask questions
+- `GET /api/documents` - List uploaded documents
+- `GET /api/fetched-urls` - View fetched URL content
 
-- "What are the key points in this document?"
-- "Can you analyze the company culture described here?"
-- "What are the main benefits mentioned?"
-- "Are there any potential concerns or red flags?"
-- "How does this compare to industry standards?"
+## 📁 Project Structure
 
-## 🏗️ Architecture
-
-### Core Components
-
-- **`web_app.py`**: Flask web application with REST API
-- **`document_qa.py`**: Core document processing and Q&A logic
-- **`templates/index.html`**: Modern web interface with CSS/JavaScript
-- **`requirements.txt`**: Python dependencies
-
-### Key Features
-
-- **Document Chunking**: Intelligent text segmentation for better retrieval
-- **Relevant Retrieval**: Finds the most pertinent document sections
-- **Conversational AI**: Friendly, analytical responses with reasoning
-- **Error Handling**: Graceful handling of various file formats and errors
+```
+Testing1/
+├── web_app_hr_bot.py          # Main HR bot application
+├── web_app_multi_model.py     # Multi-model support
+├── web_app_with_links.py      # Enhanced link following
+├── web_app.py                 # Basic document Q&A
+├── requirements.txt           # Python dependencies
+├── templates/                 # HTML templates
+│   ├── index.html
+│   └── index_multi_model.html
+├── sample_document.txt        # Sample company policy
+├── README.md                  # This file
+└── .gitignore                # Git ignore rules
+```
 
 ## 🔧 Configuration
 
 ### Environment Variables
 
-- `GOOGLE_API_KEY`: Your Google AI Studio API key (required)
+- `GEMINI_API_KEY`: Your Google Gemini API key (required)
 
 ### Customization
 
-You can modify the following parameters in the code:
+You can customize the HR bot persona by modifying the prompt in `web_app_hr_bot.py`:
 
-- **Chunk Size**: Adjust `chunk_size` in `DocumentQASystem` class
-- **Retrieval Count**: Change `top_k` in `_find_relevant_chunks` method
-- **Server Port**: Modify port in `web_app.py` (default: 8080)
-
-## 📊 API Endpoints
-
-- `GET /`: Main web interface
-- `POST /api/chat`: Send questions and get responses
-- `POST /api/upload`: Upload new documents
-- `GET /api/documents`: List loaded documents
-
-## 🛠️ Development
-
-### Project Structure
-
-```
-Testing1/
-├── web_app.py              # Main Flask application
-├── document_qa.py          # Core Q&A system
-├── requirements.txt        # Python dependencies
-├── .env                    # Environment variables (create this)
-├── .gitignore             # Git ignore rules
-├── README.md              # This file
-├── templates/
-│   └── index.html         # Web interface template
-└── venv/                  # Virtual environment (auto-created)
+```python
+HR_PROMPT = """
+You are a professional HR Assistant with expertise in employee relations, 
+company policies, and workplace guidelines. Provide empathetic, accurate, 
+and helpful responses based on the available documents.
+"""
 ```
 
-### Adding New Features
+## 📖 Example Usage
 
-1. **New File Formats**: Add parsing logic in `add_document_from_file` method
-2. **UI Enhancements**: Modify `templates/index.html` and associated CSS/JS
-3. **AI Improvements**: Update prompts in `ask_question` method
+### Uploading Documents
 
-## 🔒 Security
+1. Open the web interface at `http://localhost:8080`
+2. Click "Choose File" and select your document (PDF or text)
+3. Click "Upload Document"
+
+### Asking Questions
+
+Ask questions like:
+- "What are the work hours?"
+- "What is the maternity leave policy?"
+- "Tell me about expense reimbursement"
+- "What are the work from home policies?"
+
+### Example Response Format
+
+The system provides structured responses with:
+- **Acknowledgment** of the question
+- **Clear, structured answer** with bullet points
+- **Specific details** from documents
+- **Action items** when applicable
+- **Supportive closing** message
+
+## 🔗 Link Following
+
+The system automatically:
+1. Detects URLs in uploaded documents
+2. Fetches content from those URLs
+3. Integrates the fetched content into responses
+4. Provides comprehensive answers using both document and linked content
+
+## 🛡️ Security
 
 - API keys are stored in environment variables
-- File uploads are validated for type and content
-- No sensitive data is logged or stored permanently
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-1. **Port Already in Use**
-   ```bash
-   # Kill existing process
-   pkill -f "python web_app.py"
-   # Or change port in web_app.py
-   ```
-
-2. **API Key Issues**
-   - Ensure your `.env` file contains the correct API key
-   - Verify the key is active in Google AI Studio
-
-3. **PDF Upload Problems**
-   - Ensure PDF contains extractable text (not scanned images)
-   - Check file size (large files may take time to process)
-
-4. **Import Errors**
-   ```bash
-   # Reinstall dependencies
-   pip install -r requirements.txt
-   ```
-
-## 📈 Performance
-
-- **Document Processing**: ~1000 characters per chunk
-- **Response Time**: 2-5 seconds depending on document size
-- **Memory Usage**: Scales with document size and number of chunks
+- Sensitive data is excluded from version control
+- Virtual environment isolation
+- Input validation and sanitization
 
 ## 🤝 Contributing
 
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Test thoroughly
+4. Add tests if applicable
 5. Submit a pull request
 
-## 📄 License
+## 📝 License
 
-This project is open source and available under the MIT License.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
-## 🙏 Acknowledgments
+## 🆘 Support
 
-- Google AI Studio for providing the Gemini API
-- Flask framework for the web application
-- PyPDF2 for PDF text extraction
-- All contributors and users
+For issues and questions:
+1. Check the documentation
+2. Review existing issues
+3. Create a new issue with detailed information
+
+## 🔄 Updates
+
+The system supports:
+- Real-time document processing
+- Dynamic link following
+- Continuous learning from new documents
+- Regular updates and improvements
 
 ---
 
-**Happy Document Analysis! 📚✨** 
+**Note**: This system is designed for internal company use and should be deployed in a secure environment with appropriate access controls. 

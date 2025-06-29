@@ -26,22 +26,23 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
-class DocumentQASystem:
-    def __init__(self, api_key: Optional[str] = None):
-        """Initialize the Document Q&A System"""
-        if api_key:
-            genai.configure(api_key=api_key)
-        else:
-            api_key = os.getenv('GOOGLE_API_KEY')
-            if not api_key:
-                raise ValueError("Please provide an API key or set GOOGLE_API_KEY in .env file")
-            genai.configure(api_key=api_key)
-        
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+class HRDocumentQASystem:
+    def __init__(self):
+        """Initialize the HR Document Q&A System"""
         self.documents = []
         self.document_chunks = []
+        self.fetched_urls = {}
+        
+        # Initialize Gemini API
+        self.gemini_api_key = os.getenv('GOOGLE_API_KEY')
+        if not self.gemini_api_key:
+            raise ValueError("GOOGLE_API_KEY environment variable is required")
+        
+        genai.configure(api_key=self.gemini_api_key)
+        self.genai = genai.GenerativeModel('gemini-pro')
+        
+        self.model = genai.GenerativeModel('gemini-1.5-flash')
         self.chunk_size = 1000
-        self.fetched_urls: Dict[str, str] = {}  # Cache for fetched URL content
         self.url_pattern = re.compile(
             r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
         )
@@ -108,76 +109,127 @@ class DocumentQASystem:
         
         return None
     
-    def _process_document_links(self, content: str, title: str) -> str:
-        """Process document content to extract and fetch linked content"""
+    def _process_document_links(self, content: str, title: str, max_depth: int = 2) -> str:
+        """Process document content and fetch linked content up to specified depth"""
+        print(f"🔍 Found {len(self._extract_urls_from_text(content))} URLs in document: {title}")
+        
+        # Extract URLs from the main document
         urls = self._extract_urls_from_text(content)
         
-        if not urls:
-            return content
-        
-        print(f"🔍 Found {len(urls)} URLs in document: {title}")
-        
-        # Fetch content from URLs
-        linked_content = []
+        # Process URLs at depth 1
+        enhanced_content = content
         for url in urls:
-            url_content = self._fetch_url_content(url)
-            if url_content:
-                linked_content.append(f"\n\n[Content from: {url}]\n{url_content}")
+            if url not in self.fetched_urls:
+                fetched_content = self._fetch_url_content(url)
+                if fetched_content:
+                    self.fetched_urls[url] = fetched_content
+                    enhanced_content += f"\n\n[Content from {url}]:\n{fetched_content}"
         
-        # Combine original content with linked content
-        if linked_content:
-            enhanced_content = content + "\n\n" + "\n".join(linked_content)
-            print(f"📄 Enhanced document '{title}' with content from {len(linked_content)} links")
-            return enhanced_content
+        # If we have depth > 1, process links from fetched content (depth 2)
+        if max_depth > 1 and self.fetched_urls:
+            for url, fetched_content in self.fetched_urls.items():
+                # Extract URLs from the fetched content
+                nested_urls = self._extract_urls_from_text(fetched_content)
+                
+                # Only process new URLs that we haven't fetched yet
+                for nested_url in nested_urls:
+                    if nested_url not in self.fetched_urls and nested_url not in urls:
+                        print(f"🔗 Fetching nested URL (depth 2): {nested_url}")
+                        nested_content = self._fetch_url_content(nested_url)
+                        if nested_content:
+                            self.fetched_urls[nested_url] = nested_content
+                            enhanced_content += f"\n\n[Content from {nested_url} (depth 2)]:\n{nested_content}"
         
-        return content
+        return enhanced_content
         
-    def add_document(self, content: str, title: str = "Document"):
+    def add_document(self, content: str, title: str = "Document", max_depth: int = 2):
         """Add a document to the system with link processing"""
         # Process links in the document
-        enhanced_content = self._process_document_links(content, title)
+        enhanced_content = self._process_document_links(content, title, max_depth)
         
-        document = {
+        # Chunk the enhanced content
+        chunks = self._chunk_text(enhanced_content)
+        
+        # Store the document
+        self.documents.append({
             "title": title,
             "content": enhanced_content,
-            "chunks": self._chunk_text(enhanced_content)
-        }
-        self.documents.append(document)
-        self.document_chunks.extend([(chunk, title) for chunk in document["chunks"]])
-        return f"Added document: {title} ({len(enhanced_content)} characters, {len(document['chunks'])} chunks)"
+            "chunks": chunks
+        })
+        
+        # Add chunks to the searchable list
+        for chunk in chunks:
+            self.document_chunks.append((chunk, title))
+        
+        print(f"📄 Uploaded document: {title}")
+        print(f"📊 Content length: {len(enhanced_content)} characters")
+        print(f"📚 Total documents in system: {len(self.documents)}")
+        print(f"🔍 Total chunks in system: {len(self.document_chunks)}")
     
-    def add_document_from_file(self, file_path: str, title: Optional[str] = None):
-        """Add a document from a file with link processing"""
+    def _extract_urls_from_pdf_annotations(self, pdf_reader) -> set:
+        """Extract URLs from PDF annotations (clickable hyperlinks)"""
+        urls = set()
+        for page in pdf_reader.pages:
+            if '/Annots' in page:
+                for annot in page['/Annots']:
+                    annot_obj = annot.get_object()
+                    if '/A' in annot_obj and '/URI' in annot_obj['/A']:
+                        url = annot_obj['/A']['/URI']
+                        if url:
+                            urls.add(str(url))
+        return urls
+
+    def add_document_from_file(self, file_path: str, title: Optional[str] = None, max_depth: int = 2):
+        """Add a document from a file with link processing, including PDF hyperlinks"""
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"File not found: {file_path}")
+        
+        # Determine title
+        if title is None:
+            title = os.path.basename(file_path)
+        
+        # Read file content and extract URLs
         try:
-            file_ext = os.path.splitext(file_path)[1].lower()
-            
-            if file_ext == '.pdf':
-                # Handle PDF files
+            extra_urls = set()
+            if file_path.lower().endswith('.pdf'):
                 with open(file_path, 'rb') as file:
                     pdf_reader = PyPDF2.PdfReader(file)
                     content = ""
-                    
-                    # Extract text from all pages
-                    for page_num in range(len(pdf_reader.pages)):
-                        page = pdf_reader.pages[page_num]
-                        content += page.extract_text() + "\n"
-                    
-                    if not content.strip():
-                        return f"PDF appears to be empty or contains no extractable text: {file_path}"
+                    for page in pdf_reader.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            content += page_text + "\n"
+                    # Extract URLs from PDF annotations (clickable links)
+                    extra_urls = self._extract_urls_from_pdf_annotations(pdf_reader)
+                    print(f"🔍 Found {len(extra_urls)} URLs in PDF annotations: {extra_urls}")
             else:
-                # Handle text files
-                with open(file_path, 'r', encoding='utf-8') as file:
-                    content = file.read()
-            
-            if title is None:
-                title = os.path.basename(file_path)
-            
-            return self.add_document(content, title)
-            
-        except FileNotFoundError:
-            return f"File not found: {file_path}"
+                # Try UTF-8 first, then other encodings
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as file:
+                        content = file.read()
+                except UnicodeDecodeError:
+                    with open(file_path, 'r', encoding='latin-1') as file:
+                        content = file.read()
         except Exception as e:
-            return f"Error reading file {file_path}: {e}"
+            raise Exception(f"Error reading file {file_path}: {str(e)}")
+        
+        # If we found extra URLs in PDF annotations, process them separately
+        if extra_urls:
+            print(f"🔗 Processing {len(extra_urls)} URLs from PDF annotations")
+            for url in extra_urls:
+                if url not in content:
+                    # Fetch content from the URL
+                    fetched_content = self._fetch_url_content(url)
+                    if fetched_content:
+                        print(f"✅ Successfully fetched content from PDF link: {url} ({len(fetched_content)} characters)")
+                        # Add the fetched content to our document
+                        content += f"\n\n[Content from {url}]:\n{fetched_content}"
+                    else:
+                        print(f"❌ Failed to fetch content from PDF link: {url}")
+        
+        # Add document with link processing
+        self.add_document(content, title, max_depth)
+        return f"Added document: {title} ({len(content)} characters)"
     
     def _chunk_text(self, text: str) -> List[str]:
         """Split text into chunks for better retrieval"""
@@ -215,56 +267,122 @@ class DocumentQASystem:
         return relevant_chunks
     
     def ask_question(self, question: str) -> str:
-        """Ask a question and get answer based only on provided documents"""
+        """Ask a question and get answer as an HR bot with compassion and empathy"""
+        # Check if this is a greeting or general conversation
+        greeting_keywords = ['hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening', 'how are you', 'what\'s up', 'sup']
+        question_lower = question.lower().strip()
+        
+        # Handle greetings and general conversation
+        if any(keyword in question_lower for keyword in greeting_keywords):
+            return """**Hello! 👋 I'm your HR Assistant**
+
+I'm here to help you with any questions about company policies, employee benefits, workplace guidelines, or any other HR-related matters. I have access to your company documents and I'm ready to provide you with compassionate, empathetic support.
+
+**How can I assist you today?** I can help with:
+• **Company Policies** - Work hours, dress code, leave policies
+• **Employee Benefits** - Health insurance, vacation time, perks
+• **Workplace Guidelines** - Professional conduct, safety protocols
+• **General HR Questions** - Any concerns you might have
+
+Please feel free to ask me anything - I'm here to support you! 🤝"""
+        
+        # Special handling for new employee questions
+        new_employee_keywords = ['new employee', 'new hire', 'just started', 'first day', 'onboarding', 'critical details', 'important information']
+        if any(keyword in question_lower for keyword in new_employee_keywords):
+            return """**Welcome! 🎉** Here are the key policies from our documents:
+
+**📅 Work Hours:** 9:00 AM to 5:00 PM, Monday-Friday
+**🏖️ Vacation:** 20 days per year
+**👔 Dress Code:** Business casual (Mon-Thu), Casual Friday
+**💰 Expenses:** Submit within 30 days, receipts for $25+
+**🔒 Confidentiality:** All company info is confidential
+
+**Need anything specific?** I'm here to help! 💙"""
+        
         if not self.documents:
-            return "I don't have any documents loaded yet. Please upload some documents first, and I'll be happy to help you analyze them!"
+            return """**Hello! 👋 I'm your HR Assistant**
+
+I don't have any company documents loaded yet, but I'm here to help you with any HR-related questions or concerns you might have. 
+
+**What would you like to know about?** I can assist with general HR topics, workplace guidance, or help you understand what kind of information would be useful to have available.
+
+Please feel free to ask me anything - I'm here to support you with compassion and understanding! 🤝"""
         
         relevant_chunks = self._find_relevant_chunks(question)
         
+        # DEBUG: Print the relevant chunks/context being sent to the LLM
+        print("\n===== DEBUG: Relevant Chunks for Question =====")
+        print(f"Question: {question}")
+        for i, chunk in enumerate(relevant_chunks):
+            print(f"--- Chunk {i+1} ---\n{chunk}\n")
+        print("===== END DEBUG =====\n")
+        
         if not relevant_chunks:
-            return "I couldn't find specific information about that in the documents you've provided. However, I can help you with general questions or suggest what kind of information might be useful to look for. Could you rephrase your question or let me know what specific aspect you'd like to explore?"
+            return """**I understand your question, and I want to help! 🤝**
+
+I couldn't find specific information about that in the company documents I have access to. However, I'm here to support you and can help in several ways:
+
+**What I can do:**
+• Help you rephrase your question to find relevant information
+• Guide you to the right department or person for your specific needs
+• Provide general HR guidance and support
+• Listen to your concerns with empathy and understanding
+
+**Please let me know:**
+• Would you like to rephrase your question?
+• Is this about a specific policy or benefit you're looking for?
+• Do you need help finding the right person to contact?
+
+I'm here to support you every step of the way! 💙"""
         
         context = "\n\n".join(relevant_chunks)
         
-        prompt = f"""You are a knowledgeable and helpful assistant who specializes in analyzing documents. Your top priority is to provide clear, well-formatted, and easy-to-read responses.
+        prompt = f"""You are a professional, compassionate, and empathetic HR Assistant. Your role is to provide clear, structured, and specific answers based ONLY on the provided company documents and their linked content.
 
-FORMATTING REQUIREMENTS:
-- Use bullet points (• or -) for lists and key points
-- Add proper spacing between sections (double line breaks)
-- Use bold text (**text**) for important terms or headings
-- Structure information in clear, organized sections
-- Use numbered lists when presenting steps or sequences
-- Keep paragraphs short and readable
+**YOUR ROLE AS HR ASSISTANT:**
+• Provide accurate, document-based information
+• Structure responses with clear bullet points and sections
+• Be specific and actionable
+• Show empathy and understanding
+• Use professional HR language
+• Format responses for easy reading
 
-CORE PRINCIPLES:
-1. **Clarity**: Present information in a clear, organized manner
-2. **Readability**: Use proper formatting with bullets, spacing, and structure
-3. **Document Grounding**: Base your answer on the provided documents (including linked content)
-4. **Completeness**: Provide comprehensive but well-organized information
-5. **Professional Tone**: Be helpful and informative
+**RESPONSE STRUCTURE:**
+1. **Brief acknowledgment** of the employee's question
+2. **Clear, structured answer** with bullet points
+3. **Specific details** from the documents
+4. **Action items** if applicable
+5. **Supportive closing** message
 
-WHEN ANSWERING:
-- Start with a brief overview or direct answer
-- Use bullet points for lists and key information
-- Add proper spacing between different sections
-- Use bold formatting for important terms
-- Structure complex information in clear sections
-- If providing multiple points, use numbered or bulleted lists
-- Reference specific parts of the documents when relevant
-- If information comes from linked content, mention the source
+**FORMATTING REQUIREMENTS:**
+• Use **bold headers** for sections
+• Use bullet points (•) for lists
+• Use numbered lists for steps or procedures
+• Use emojis sparingly but appropriately
+• Break information into digestible chunks
+• Highlight important information
 
-DOCUMENTS TO ANALYZE:
+**CONTEXT FROM COMPANY DOCUMENTS:**
 {context}
 
-QUESTION: {question}
+**EMPLOYEE QUESTION:** {question}
 
-Please provide a clear, well-formatted response with proper bullets, spacing, and structure based on the documents above. Make the information easy to read and understand."""
+**HR ASSISTANT RESPONSE:**"""
         
         try:
             response = self.model.generate_content(prompt)
             return response.text
         except Exception as e:
-            return f"I apologize, but I encountered an error while processing your question: {e}. Please try rephrasing your question or let me know if you need help with something else."
+            return f"""**I apologize for the technical difficulty! 😔**
+
+I encountered an error while processing your question, but I want you to know that I'm here to help. 
+
+**What you can do:**
+• Try rephrasing your question
+• Let me know if you need help with something else
+• Contact HR directly if this is urgent
+
+I'm committed to supporting you, and I'll do my best to get you the information you need! 💙"""
     
     def list_documents(self) -> List[dict]:
         """List all documents in the system"""
@@ -299,9 +417,9 @@ Please provide a clear, well-formatted response with proper bullets, spacing, an
             for url, content in self.fetched_urls.items()
         }
 
-# Initialize the Q&A system
+# Initialize the HR Q&A system
 try:
-    qa_system = DocumentQASystem()
+    qa_system = HRDocumentQASystem()
     
     # Add sample document if it exists
     sample_doc_path = "sample_document.txt"
@@ -312,7 +430,7 @@ try:
         print("⚠️  sample_document.txt not found")
         
 except Exception as e:
-    print(f"❌ Error initializing Q&A system: {e}")
+    print(f"❌ Error initializing HR Q&A system: {e}")
     qa_system = None
 
 @app.route('/')
@@ -325,7 +443,7 @@ def chat():
     """Handle chat messages"""
     if not qa_system:
         return jsonify({
-            "error": "Q&A system not initialized. Please check your API key."
+            "error": "HR Q&A system not initialized. Please check your API key."
         }), 500
     
     try:
@@ -336,11 +454,11 @@ def chat():
             return jsonify({"error": "Message cannot be empty"}), 400
         
         # Debug logging
-        print(f"💬 Question: {message}")
+        print(f"💬 Employee Question: {message}")
         print(f"📚 Documents available: {len(qa_system.documents)}")
         print(f"🔍 Chunks available: {len(qa_system.document_chunks)}")
         
-        # Get response from Q&A system
+        # Get response from HR Q&A system
         response = qa_system.ask_question(message)
         
         return jsonify({
@@ -355,7 +473,7 @@ def chat():
 def get_documents():
     """Get list of loaded documents"""
     if not qa_system:
-        return jsonify({"error": "Q&A system not initialized"}), 500
+        return jsonify({"error": "HR Q&A system not initialized"}), 500
     
     try:
         documents = qa_system.list_documents()
@@ -367,7 +485,7 @@ def get_documents():
 def upload_document():
     """Upload a new document"""
     if not qa_system:
-        return jsonify({"error": "Q&A system not initialized"}), 500
+        return jsonify({"error": "HR Q&A system not initialized"}), 500
     
     try:
         if 'file' not in request.files:
@@ -425,7 +543,7 @@ def upload_document():
         title = file.filename
         
         # Add document to system
-        result = qa_system.add_document(content, title)
+        result = qa_system.add_document(content, title, max_depth=2)
         
         # Debug logging
         print(f"📄 Uploaded document: {title}")
@@ -446,7 +564,7 @@ def upload_document():
 def remove_document():
     """Remove a document from the system"""
     if not qa_system:
-        return jsonify({"error": "Q&A system not initialized"}), 500
+        return jsonify({"error": "HR Q&A system not initialized"}), 500
     
     try:
         data = request.get_json()
@@ -469,7 +587,7 @@ def remove_document():
 def get_fetched_urls():
     """Get information about fetched URLs"""
     if not qa_system:
-        return jsonify({"error": "Q&A system not initialized"}), 500
+        return jsonify({"error": "HR Q&A system not initialized"}), 500
     
     try:
         urls = qa_system.get_fetched_urls()
@@ -479,7 +597,7 @@ def get_fetched_urls():
 
 if __name__ == '__main__':
     if qa_system:
-        print("🚀 Starting Document Q&A Web Server with Link Following...")
+        print("🚀 Starting HR Document Q&A Web Server with Link Following...")
         print("📚 Loaded documents:", len(qa_system.documents))
         print("🌐 Open your browser and go to: http://localhost:8080")
         app.run(debug=True, host='0.0.0.0', port=8080)
