@@ -15,7 +15,7 @@ import json
 import re
 import requests
 from typing import List, Dict, Optional, Set
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import PyPDF2
 from flask import Flask, request, jsonify, render_template, session, redirect, url_for, flash
 from flask_dance.contrib.google import make_google_blueprint, google
@@ -25,37 +25,75 @@ from sentence_transformers import SentenceTransformer
 import numpy as np
 from urllib.parse import urlparse
 import hashlib
+from oauthlib.oauth2.rfc6749.errors import TokenExpiredError
+from werkzeug.middleware.proxy_fix import ProxyFix
+import random
+import smtplib
+from email.mime.text import MIMEText
 
 # Import configuration
 try:
-    from config import GOOGLE_CLIENT_SECRET, SECRET_KEY, GEMINI_API_KEY
+    from config import (
+        GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, SECRET_KEY, GEMINI_API_KEY,
+        EMAIL_CONFIG, EMAIL_USERNAME, EMAIL_PASSWORD, EMAIL_FROM, 
+        EMAIL_FROM_NAME, EMAIL_ENABLED, EMAIL_PROVIDER, EMAIL_TIMEOUT, EMAIL_MAX_RETRIES
+    )
 except ImportError:
     # Fallback to environment variables
+    GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "your-client-id-here")
     GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "your-client-secret-here")
     SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here")
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    EMAIL_CONFIG = {
+        'smtp_server': os.getenv("EMAIL_SMTP_SERVER", "smtp.gmail.com"),
+        'smtp_port': int(os.getenv("EMAIL_SMTP_PORT", "587")),
+        'use_tls': True,
+        'use_ssl': False
+    }
+    EMAIL_USERNAME = os.getenv("EMAIL_USERNAME", "your-email@gmail.com")
+    EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "your-app-password")
+    EMAIL_FROM = os.getenv("EMAIL_FROM", "your-email@gmail.com")
+    EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "HR Document Q&A System")
+    EMAIL_ENABLED = os.getenv("EMAIL_ENABLED", "false").lower() == "true"
+    EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "gmail").lower()
+    EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "30"))
+    EMAIL_MAX_RETRIES = int(os.getenv("EMAIL_MAX_RETRIES", "3"))
 
-# Configuration
-GOOGLE_CLIENT_ID = "710501982331-qr11u9rnbfk8p8kd5skkbbvvrs7vg6em.apps.googleusercontent.com"
+# Configuration - Remove hardcoded client ID, use from config/env
+# GOOGLE_CLIENT_ID = "710501982331-qr11u9rnbfk8p8kd5skkbbvvrs7vg6em.apps.googleusercontent.com"
 
 # Initialize Flask app
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
-# Configure OAuth to allow insecure transport for local development
-os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+# Debug: Print configuration (without sensitive values)
+print(f"🔧 OAuth Configuration:")
+print(f"   Client ID: {GOOGLE_CLIENT_ID[:10]}..." if GOOGLE_CLIENT_ID and len(GOOGLE_CLIENT_ID) > 10 else f"   Client ID: {GOOGLE_CLIENT_ID}")
+print(f"   Client Secret: {'*' * 10}..." if GOOGLE_CLIENT_SECRET else "   Client Secret: Not set")
+print(f"   Gemini API Key: {'*' * 10}..." if GEMINI_API_KEY else "   Gemini API Key: Not set")
+print(f"   Flask Secret Key: {'*' * 10}..." if SECRET_KEY else "   Flask Secret Key: Not set")
 
-# Configure Google OAuth
+# Configure OAuth - only allow insecure transport for local development
+if os.getenv('FLASK_ENV') == 'development' or 'localhost' in os.getenv('HOSTNAME', ''):
+    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+    print("🔧 Development mode: Allowing insecure transport for OAuth")
+
+# Configure Google OAuth with explicit redirect URI
 google_bp = make_google_blueprint(
     client_id=GOOGLE_CLIENT_ID,
     client_secret=GOOGLE_CLIENT_SECRET,
-    scope=["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"]
+    scope=["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"],
+    redirect_to="index"  # Redirect to index route after login
 )
 app.register_blueprint(google_bp, url_prefix="/login")
 
 # Global variables for document storage (in production, use a database)
 user_documents = {}  # {user_email: {documents: [], chunks: [], embeddings: []}}
 user_fetched_urls = {}  # {user_email: {url: content}}
+
+# In-memory OTP store: {email: (otp, expiry_datetime)}
+otp_store = {}
 
 class HRDocumentQA:
     def __init__(self):
@@ -332,20 +370,47 @@ except Exception as e:
 def login_required(f):
     """Decorator to require login for certain routes"""
     def decorated_function(*args, **kwargs):
-        if not google.authorized:
-            return redirect(url_for('google.login'))
-        return f(*args, **kwargs)
+        # Check for email OTP authentication first
+        if session.get('logged_in') and session.get('user_email'):
+            return f(*args, **kwargs)
+        
+        # Check for Google OAuth authentication
+        if google.authorized:
+            return f(*args, **kwargs)
+        
+        # If neither is authenticated, redirect to login
+        return redirect(url_for('login'))
     decorated_function.__name__ = f.__name__
     return decorated_function
 
 @app.route('/')
 def index():
     """Main page - redirect to login if not authenticated"""
+    # Check for email OTP authentication first
+    if session.get('logged_in') and session.get('user_email'):
+        user_email = session.get('user_email')
+        user_name = session.get('user_name', user_email.split('@')[0])
+        # Initialize user document storage if not exists
+        if user_email not in user_documents:
+            user_documents[user_email] = {"documents": [], "chunks": [], "embeddings": []}
+        return render_template('index.html', user_email=user_email, user_name=user_name)
+    
+    # Check for Google OAuth authentication
     if not google.authorized:
         return render_template('login.html', logged_in=False)
     
-    # Get user info
-    resp = google.get('/oauth2/v2/userinfo')
+    try:
+        # Get user info
+        resp = google.get('/oauth2/v2/userinfo')
+    except TokenExpiredError:
+        print("🔄 OAuth token expired, clearing session and redirecting to login")
+        session.clear()
+        return redirect(url_for('login'))
+    except Exception as e:
+        print(f"❌ OAuth error: {e}")
+        session.clear()
+        return redirect(url_for('login'))
+    
     if resp.ok:
         user_info = resp.json()
         user_email = user_info['email']
@@ -358,22 +423,46 @@ def index():
             user_documents[user_email] = {"documents": [], "chunks": [], "embeddings": []}
         return render_template('index.html', user_email=user_email, user_name=first_name)
     else:
-        return render_template('login.html', logged_in=False)
+        print(f"❌ OAuth response not OK: {resp.status_code} - {resp.text}")
+        session.clear()
+        return redirect(url_for('login'))
 
 @app.route('/login')
 def login():
-    """Explicit login page route for Google OAuth"""
-    if google.authorized:
+    """Explicit login page route for Google OAuth and Email OTP"""
+    # Check for email OTP authentication first
+    if session.get('logged_in') and session.get('user_email'):
+        user_email = session.get('user_email')
+        user_name = session.get('user_name', user_email.split('@')[0])
+        return render_template('login.html', logged_in=True, user_email=user_email, user_name=user_name)
+    
+    # Check for Google OAuth authentication
+    if not google.authorized:
+        return render_template('login.html', logged_in=False)
+    
+    try:
         resp = google.get('/oauth2/v2/userinfo')
-        if resp.ok:
-            user_info = resp.json()
-            user_email = user_info['email']
-            full_name = user_info.get('name', user_email.split('@')[0])
-            first_name = full_name.split()[0] if ' ' in full_name else full_name  # Extract first name only
-            session['user_email'] = user_email
-            session['user_name'] = first_name  # Store first name in session
-            return render_template('login.html', logged_in=True, user_email=user_email, user_name=first_name)
-    return render_template('login.html', logged_in=False)
+    except TokenExpiredError:
+        print("🔄 OAuth token expired, clearing session and redirecting to login")
+        session.clear()
+        return redirect(url_for('login'))
+    except Exception as e:
+        print(f"❌ OAuth error: {e}")
+        session.clear()
+        return redirect(url_for('login'))
+    
+    if resp.ok:
+        user_info = resp.json()
+        user_email = user_info['email']
+        full_name = user_info.get('name', user_email.split('@')[0])
+        first_name = full_name.split()[0] if ' ' in full_name else full_name  # Extract first name only
+        session['user_email'] = user_email
+        session['user_name'] = first_name  # Store first name in session
+        return render_template('login.html', logged_in=True, user_email=user_email, user_name=first_name)
+    else:
+        print(f"❌ OAuth response not OK: {resp.status_code} - {resp.text}")
+        session.clear()
+        return redirect(url_for('login'))
 
 @app.route('/logout', methods=['GET', 'POST'])
 def logout():
@@ -467,13 +556,13 @@ def chat():
         response = hr_qa.ask_question(question, user_email, user_name)
         return jsonify({
             "response": response,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         })
     except Exception as e:
         print(f"❌ Error in chat: {e}")
         return jsonify({
             "response": "I apologize, but I encountered an error while processing your question. Please try again.",
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }), 500
 
 @app.route('/api/fetched-urls')
@@ -534,6 +623,142 @@ def remove_document():
         })
     
     return jsonify({"error": "No documents found"}), 404
+
+# Helper: send OTP email with real SMTP support
+def send_otp_email(recipient, otp):
+    if EMAIL_ENABLED:
+        try:
+            # Create email message with better formatting
+            email_body = f"""
+Hello!
+
+Your OTP (One-Time Password) for HR Document Q&A System login is:
+
+🔐 **{otp}**
+
+This code will expire in 2 minutes.
+
+If you didn't request this code, please ignore this email.
+
+Best regards,
+{EMAIL_FROM_NAME}
+            """
+            
+            msg = MIMEText(email_body, 'plain', 'utf-8')
+            msg['Subject'] = f'Your Login OTP - {EMAIL_FROM_NAME}'
+            msg['From'] = f'{EMAIL_FROM_NAME} <{EMAIL_FROM}>'
+            msg['To'] = recipient
+            
+            # Get email configuration
+            smtp_server = EMAIL_CONFIG['smtp_server']
+            smtp_port = EMAIL_CONFIG['smtp_port']
+            use_tls = EMAIL_CONFIG['use_tls']
+            use_ssl = EMAIL_CONFIG['use_ssl']
+            
+            print(f"📧 Attempting to send email via {EMAIL_PROVIDER} ({smtp_server}:{smtp_port})")
+            
+            # Send email with retry logic
+            for attempt in range(EMAIL_MAX_RETRIES):
+                try:
+                    if use_ssl:
+                        server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=EMAIL_TIMEOUT)
+                    else:
+                        server = smtplib.SMTP(smtp_server, smtp_port, timeout=EMAIL_TIMEOUT)
+                    
+                    if use_tls:
+                        server.starttls()
+                    
+                    server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
+                    server.send_message(msg)
+                    server.quit()
+                    
+                    print(f"✅ OTP email sent successfully to {recipient} (attempt {attempt + 1})")
+                    return True
+                    
+                except smtplib.SMTPAuthenticationError as e:
+                    print(f"❌ Authentication failed for {EMAIL_PROVIDER}: {e}")
+                    if attempt == EMAIL_MAX_RETRIES - 1:
+                        raise
+                except smtplib.SMTPException as e:
+                    print(f"❌ SMTP error (attempt {attempt + 1}): {e}")
+                    if attempt == EMAIL_MAX_RETRIES - 1:
+                        raise
+                except Exception as e:
+                    print(f"❌ Connection error (attempt {attempt + 1}): {e}")
+                    if attempt == EMAIL_MAX_RETRIES - 1:
+                        raise
+                
+                if attempt < EMAIL_MAX_RETRIES - 1:
+                    print(f"🔄 Retrying in 2 seconds... (attempt {attempt + 2}/{EMAIL_MAX_RETRIES})")
+                    import time
+                    time.sleep(2)
+            
+        except Exception as e:
+            print(f"❌ Failed to send OTP email to {recipient}: {e}")
+            print(f"📧 Falling back to console output")
+            # Fall back to console output
+            print(f"[OTP DEMO] Sending OTP {otp} to {recipient}")
+            return False
+    else:
+        # Demo mode: print OTP to console
+        print(f"[OTP DEMO] Sending OTP {otp} to {recipient}")
+        print(f"📧 To enable real email sending:")
+        print(f"   1. Set EMAIL_ENABLED=true in your .env file")
+        print(f"   2. Configure EMAIL_USERNAME and EMAIL_PASSWORD")
+        print(f"   3. Set EMAIL_PROVIDER (gmail, outlook, yahoo, or custom)")
+        return False
+
+@app.route('/login/email', methods=['GET', 'POST'])
+def email_login():
+    if request.method == 'POST':
+        email = request.form.get('email')
+        if not email:
+            flash('Please enter your email.', 'danger')
+            return render_template('login.html', logged_in=False)
+        # Generate OTP
+        otp = str(random.randint(100000, 999999))
+        expiry = datetime.now(timezone.utc) + timedelta(minutes=2)
+        otp_store[email] = (otp, expiry)
+        
+        # Send OTP
+        email_sent = send_otp_email(email, otp)
+        
+        if EMAIL_ENABLED:
+            if email_sent:
+                flash('OTP sent to your email successfully!', 'success')
+            else:
+                flash('Failed to send email. Please check console for OTP or try again.', 'warning')
+        else:
+            flash('OTP sent to your email (check console in demo mode).', 'info')
+        
+        return render_template('login.html', logged_in=False, otp_sent=True, email=email)
+    return render_template('login.html', logged_in=False)
+
+@app.route('/login/email/verify', methods=['POST'])
+def email_verify():
+    email = request.form.get('email')
+    otp = request.form.get('otp')
+    if not email or not otp:
+        flash('Missing email or OTP.', 'danger')
+        return render_template('login.html', logged_in=False)
+    stored = otp_store.get(email)
+    if not stored:
+        flash('No OTP found for this email. Please request a new one.', 'danger')
+        return render_template('login.html', logged_in=False)
+    real_otp, expiry = stored
+    if datetime.now(timezone.utc) > expiry:
+        flash('OTP expired. Please request a new one.', 'danger')
+        del otp_store[email]
+        return render_template('login.html', logged_in=False)
+    if otp != real_otp:
+        flash('Invalid OTP. Please try again.', 'danger')
+        return render_template('login.html', logged_in=False, otp_sent=True, email=email)
+    # OTP correct: log in user
+    session['user_email'] = email
+    session['logged_in'] = True
+    del otp_store[email]
+    flash('Logged in successfully!', 'success')
+    return redirect(url_for('index'))
 
 if __name__ == '__main__':
     if hr_qa is None:

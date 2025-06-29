@@ -1,9 +1,9 @@
-numpy==2.3.1
-pandas==2.3.0
-python-dateutil==2.9.0.post0
-pytz==2025.2
-six==1.17.0
-tzdata==2025.2
+numpy==1.24.3
+pandas==2.0.3
+python-dateutil==2.8.2
+pytz==2023.3
+six==1.16.0
+tzdata==2023.3
 openai==1.12.0
 google-generativeai==0.3.2
 python-dotenv==1.0.0
@@ -11,3 +11,9 @@ flask==2.3.3
 flask-cors==4.0.0
 PyPDF2==3.0.1
 requests==2.31.0
+flask-dance==7.0.0
+sentence-transformers==2.2.2
+torch==2.0.1
+transformers==4.35.0
+beautifulsoup4==4.12.2
+lxml==4.9.3

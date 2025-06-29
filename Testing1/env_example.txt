@@ -1,0 +1,41 @@
+# HR Document Q&A System Environment Configuration
+# Copy this file to .env and fill in your actual values
+
+# Google OAuth Configuration
+GOOGLE_CLIENT_ID=your-google-client-id-here
+GOOGLE_CLIENT_SECRET=your-google-client-secret-here
+
+# Gemini AI Configuration
+GOOGLE_API_KEY=your-gemini-api-key-here
+
+# Flask Configuration
+FLASK_SECRET_KEY=your-secret-key-here
+
+# Email Configuration for OTP Login
+# Set EMAIL_ENABLED=true to enable real email sending
+EMAIL_ENABLED=false
+
+# Choose your email provider: gmail, outlook, yahoo, or custom
+EMAIL_PROVIDER=gmail
+
+# Email credentials (required when EMAIL_ENABLED=true)
+EMAIL_USERNAME=your-email@gmail.com
+EMAIL_PASSWORD=your-app-password
+EMAIL_FROM=your-email@gmail.com
+EMAIL_FROM_NAME=HR Document Q&A System
+
+# Optional: Customize email settings
+EMAIL_TIMEOUT=30
+EMAIL_MAX_RETRIES=3
+
+# Custom SMTP settings (only needed if EMAIL_PROVIDER=custom)
+# EMAIL_SMTP_SERVER=smtp.your-provider.com
+# EMAIL_SMTP_PORT=587
+# EMAIL_USE_TLS=true
+# EMAIL_USE_SSL=false
+
+# Instructions:
+# 1. Copy this file to .env
+# 2. Replace the placeholder values with your actual credentials
+# 3. For email setup, see EMAIL_SETUP.md for detailed instructions
+# 4. Never commit the .env file to version control 

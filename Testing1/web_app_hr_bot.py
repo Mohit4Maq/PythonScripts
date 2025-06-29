@@ -34,9 +34,9 @@ class HRDocumentQASystem:
         self.fetched_urls = {}
         
         # Initialize Gemini API
-        self.gemini_api_key = os.getenv('GOOGLE_API_KEY')
+        self.gemini_api_key = os.getenv('GEMINI_API_KEY')
         if not self.gemini_api_key:
-            raise ValueError("GOOGLE_API_KEY environment variable is required")
+            raise ValueError("GEMINI_API_KEY environment variable is required")
         
         genai.configure(api_key=self.gemini_api_key)
         self.genai = genai.GenerativeModel('gemini-pro')
