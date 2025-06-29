@@ -1,0 +1,14 @@
+Simple Test Document with Links
+
+This document contains a few simple links to test the link-following functionality.
+
+LINKS TO TEST:
+- Python documentation: https://docs.python.org
+- GitHub: https://github.com
+
+WORK HOURS:
+- Standard work hours are 9:00 AM to 5:00 PM, Monday through Friday
+- Flexible work arrangements are available upon manager approval
+- Overtime must be pre-approved by your supervisor
+
+This is a simple test document to verify that link-following works correctly. 

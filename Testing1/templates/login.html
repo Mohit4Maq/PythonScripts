@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Polistry AI HR BOT</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .login-container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 400px;
+            padding: 40px 30px 30px 30px;
+            text-align: center;
+        }
+        .login-header {
+            margin-bottom: 30px;
+        }
+        .login-header h1 {
+            font-size: 26px;
+            font-weight: 700;
+            color: #4f46e5;
+            margin-bottom: 10px;
+        }
+        .login-header p {
+            color: #6b7280;
+            font-size: 15px;
+        }
+        .google-btn {
+            background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 14px 0;
+            width: 100%;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 20px;
+            transition: all 0.2s ease;
+        }
+        .google-btn:hover {
+            background: #4f46e5;
+            transform: translateY(-2px);
+        }
+        .user-info {
+            margin-top: 20px;
+            color: #374151;
+            font-size: 15px;
+        }
+        .logout-btn {
+            background: #ef4444;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            margin-top: 15px;
+            transition: all 0.2s ease;
+        }
+        .logout-btn:hover {
+            background: #dc2626;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <h1>Welcome to Polistry AI HR BOT</h1>
+            <p>Your secure HR assistant. Please sign in with Google to continue.</p>
+        </div>
+        {% if not logged_in %}
+            <form action="{{ url_for('google.login') }}" method="get">
+                <button type="submit" class="google-btn">Sign in with Google</button>
+            </form>
+        {% else %}
+            <div class="user-info">
+                <strong>Signed in as:</strong><br>
+                {{ user_email }}
+            </div>
+            <form action="{{ url_for('logout') }}" method="post">
+                <button type="submit" class="logout-btn">Logout</button>
+            </form>
+        {% endif %}
+    </div>
+</body>
+</html> 
